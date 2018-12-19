@@ -1,0 +1,203 @@
+#This script is for calculating the positions for all the accounts
+#This is the conversion script only
+#Takes one year as an input and runs for that year
+#one year at a time.
+#
+
+
+Print_Status() {
+#RED="\033[31m"
+#GREEN="\033[32m"
+#YELLOW="\033[33m"
+#NUETRAL="\033[m"
+
+#DEBUG_FLAG
+
+STATUS="$1"
+TEXT=$2
+if [ $STATUS -eq 0 ] ; then
+        echo -e "$TEXT - [ SUCCESS ]"
+elif [ $STATUS -eq 10 ] ; then
+        echo -e "$TEXT - [ SKIPPED ]"
+else
+        echo -e "$TEXT - [ FAILED ]"
+	exit 1
+fi
+
+}
+
+Log_Msg(){
+
+if [ $# -eq 2 ] ; then
+	g_MSG="$2"
+fi
+
+g_MSG_TYPE=$1
+
+echo "`date "+%Y-%m-%d %H-%M-%S.%s"`: $g_MSG_TYPE : $g_MSG" >> $g_LOG_FILE
+l_STATUS=$?
+if [ $l_STATUS -ne 0 ] ; then
+	echo " $C_ERROR an error occurred while writing to Log file : $g_LOG_FILE \
+	Disk might be ful or permission issue"
+	return $C_FAILURE
+fi
+
+return $C_SUCCESS
+
+}
+
+SQL_Exec() {
+
+if [ $# -eq 1 ] ; then
+	IDX="${1}"
+	cat $g_STATUS_TRACKER_FILE | cut -f1 -d\| | grep "$IDX" > /dev/null
+	l_STATUS=$?
+
+	#echo Exce status: $l_STATUS
+	if [ $l_STATUS -eq 0 ] ; then
+
+	        if [ "${DEBUG_FLAG}empty" = "TRUEempty" ] ; then
+		        g_MSG="$IDX is done, so Skipping $g_SQL_STMT"
+                else
+		        g_MSG="$IDX is done, so Skipping "
+                fi
+
+		Log_Msg $C_INFO 
+		return $C_SKIP
+	else
+		g_MSG="$g_SQL_STMT"
+	        if [ "${DEBUG_FLAG}empty" = "TRUEempty" ] ; then
+		        Log_Msg $C_INFO
+                fi
+		START_TM=`date "+%Y-%m-%d %H-%M-%S.%s"`
+		#psql -U $GP_USER_NAME -w -h $GP_HOST_NAME --set ON_ERROR_STOP=1 -A -t --tuples-only -1 -P format=unaligned -d $GP_DB_NAME <<EOF >> ${g_LOG_FILE} 2>&1
+		psql -U $GP_USER_NAME -w -h $GP_HOST_NAME -d $GP_DB_NAME <<EOF >> ${g_LOG_FILE} 2>&1
+
+                set search_path=$GP_SCHEMA_NAME,public;
+		$g_SQL_STMT;
+EOF
+		l_STATUS=$?
+                ERROR_COUNT=`grep -i ERROR ${g_LOG_FILE} | wc -l`
+		#echo Exce status: $l_STATUS
+		if [ $l_STATUS -eq 0 ] && [ $ERROR_COUNT -eq 0 ] ; then
+			Log_Msg $C_INFO "Above SQL is SUCCESSFULL"
+			Status_Logger "${IDX}" "$START_TM"
+			return $C_SUCCESS
+		else
+			Log_Msg $C_ERROR "Above SQL is FAILED, so exiting"
+			return $C_FAILURE
+		fi
+	fi
+fi
+
+}
+
+
+SQL_Exec_Ret_Val() {
+g_SQL_RET_VAL_LOG_FILE=$APP_LOG_DIR/${JOB_ID}_${EXEC_SCRIPT}_`date "$DATE_FORMAT"`_SQL_Ret_Val.log
+
+if [ $# -eq 1 ] ; then
+	g_SQL_STMT="$1"
+fi
+g_MSG="$g_SQL_STMT"
+Log_Msg $C_INFO
+
+psql -U $GP_USER_NAME -w -h $GP_HOST_NAME -A -t --tuples-only -1 --single-transaction -P format=unaligned -d $GP_DB_NAME <<EOF > ${g_SQL_RET_VAL_LOG_FILE} 2>&1
+
+set search_path=$GP_SCHEMA_NAME,public;
+$g_SQL_STMT;
+EOF
+l_STATUS=$?
+
+#echo Exce status: $l_STATUS
+if [ $l_STATUS -eq 0 ] ; then
+   	Log_Msg $C_INFO "Above SQL is SUCCESSFULL"
+	return $C_SUCCESS
+else
+   	Log_Msg $C_ERROR "Above SQL is FAILED"
+	return $C_FAILURE
+fi
+
+}
+
+UNIX_Cmd_Exec() {
+
+if [ $# -eq 1 ] ; then
+	g_UNIX_CMD="$1"
+fi
+
+Log_Msg $C_INFO "$g_UNIX_CMD"
+g_RET_VAL=`$g_UNIX_CMD 2>> ${g_LOG_FILE} 2>&1`
+l_STATUS=$?
+
+#echo Exce status: $l_STATUS
+if [ $l_STATUS -eq 0 ] ; then
+   	Log_Msg $C_INFO "g_RET_VAL: $g_RET_VAL"
+	return $C_SUCCESS
+else
+   	Log_Msg $C_ERROR " Above is FAILED "
+	return $C_FAILURE
+fi
+
+}
+
+Status_Logger() {
+
+if [ $# -ne 2 ] ; then
+Log_Msg $C_ERROR "Argument required to log status are 2, passed were $# , unable to log the Status in $g_STATUS_TRACKER_FILE, so exiting"
+echo "$C_ERROR: Argument required to log status are 2, passed were $# , unable to log the Status in $g_STATUS_TRACKER_FILE, so exiting"
+exit 1
+fi
+END_TM=`date "+%Y-%m-%d %H-%M-%S.%s"`
+echo "$1|$2|$END_TM|SUCCESS" >> $g_STATUS_TRACKER_FILE
+l_STATUS=$?
+if [ $l_STATUS -eq 0 ] ; then
+   	Log_Msg $C_INFO "Logged [$1] status: $g_STATUS_TRACKER_FILE"
+	return $C_SUCCESS
+else
+   	Log_Msg $C_ERROR "Logging [$1] status has FAILED , so exiting "
+   	echo "$C_ERROR: Logging [$1] status to $g_STATUS_TRACKER_FILE"
+	exit 1
+fi
+
+}
+
+
+Exec_SQL_Array() {
+
+ARG="$1"
+for idx in ${!g_SQL_ARRAY[*]}
+do
+        g_SQL_STMT="${g_SQL_ARRAY[$idx]}"
+        COMMENT_TEXT="${g_SQL_COMMENT_ARRAY[$idx]}"
+        if [ ! -z "${g_SQL_COMMENT_ARRAY[$idx]}" ] ; then
+                COMMENT_TEXT="- ${g_SQL_COMMENT_ARRAY[$idx]}"
+        else
+                COMMENT_TEXT=""
+        fi
+
+	#echo "idx: $idx g_SQL_ARRAY: $g_SQL_STMT"
+        SQL_Exec "${ARG}:${idx}"
+        Print_Status $? "SQL ${ARG} [$idx] $COMMENT_TEXT - `date`"
+done
+
+unset 'g_SQL_ARRAY'
+unset 'SQL_ARRAY'
+unset 'g_SQL_COMMENT_ARRAY'
+unset 'COMMENT_ARRAY'
+
+}
+
+Validate_Argument_Count () {
+
+REQUIRED=$1
+GIVEN=$2
+
+if [ $REQUIRED -ne $GIVEN ] ; then
+   	Log_Msg $C_ERROR "Argument count didn't match REQUIRED $REQUIRED GIVEN:$GIVEN "
+   	echo "$C_ERROR: Argument count didn't match REQUIRED $REQUIRED GIVEN:$GIVEN "
+	exit 1
+fi
+
+}
+

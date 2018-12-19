@@ -1,0 +1,6 @@
+export GP_DB_NAME=prdev
+export GP_SCHEMA_NAME=edjus_ma
+export GP_HOST_NAME=10.17.89.96
+export GP_USER_NAME=pr_edjus_bat_gp
+export APP_LOG_DIR=$LOGS_GP
+export DEBUG_FLAG=TRUE
